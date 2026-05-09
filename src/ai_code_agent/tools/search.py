@@ -81,7 +81,7 @@ def _walk_text_files(root: Path):
     for path in sorted(root.rglob("*")):
         if path.is_dir():
             continue
-        if any(part in SKIP_DIR_NAMES for part in path.parts):
+        if any(part in SKIP_DIR_NAMES for part in path.relative_to(root).parts):
             continue
         try:
             if path.stat().st_size > MAX_FILE_BYTES_FOR_SEARCH:
