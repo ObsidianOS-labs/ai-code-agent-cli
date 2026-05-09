@@ -100,6 +100,16 @@ def test_provider_keys_has_key_for_cloud_auth_kinds():
     assert keys.has_key_for("bedrock")
 
 
+def test_provider_keys_has_key_for_lmstudio_no_env_var():
+    """Regression: LM Studio is ``kind="openai_compat"`` with ``env_var=None``
+    (it's a local server, no API key required). ``has_key_for`` previously
+    fell through every special case and returned False, breaking the CLI
+    pre-check at ``cli.py:_handle_slash`` and ``ask`` even though
+    :func:`build_provider` itself handles the missing-key case fine."""
+    keys = ProviderKeys()
+    assert keys.has_key_for("lmstudio")
+
+
 def test_provider_keys_has_key_for_custom_requires_base_url():
     keys = ProviderKeys()
     assert not keys.has_key_for("custom")

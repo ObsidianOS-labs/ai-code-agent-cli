@@ -75,6 +75,10 @@ class ProviderKeys:
             return True
         if entry.kind == "custom":
             return bool(self.custom_base_url)
+        if entry.kind == "openai_compat" and not entry.env_var:
+            # Local OpenAI-compatible servers (e.g. LM Studio) don't require
+            # an API key — the factory passes a placeholder string instead.
+            return True
         return bool(self.api_key_for(entry))
 
 
