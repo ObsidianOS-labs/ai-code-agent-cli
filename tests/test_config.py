@@ -54,8 +54,13 @@ def test_unsupported_provider_raises(tmp_path: Path):
 
 
 def test_supported_providers_have_defaults():
+    # Every catalog entry except the user-supplied ``custom`` preset ships
+    # with a default model so users can run `ai-code-agent --provider <id>`
+    # without specifying ``--model``.
     for name in SUPPORTED_PROVIDERS:
-        assert name in DEFAULT_MODELS
+        if name == "custom":
+            continue
+        assert name in DEFAULT_MODELS, name
 
 
 def test_toml_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

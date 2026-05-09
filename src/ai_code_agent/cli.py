@@ -7,13 +7,15 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from ai_code_agent import __version__
 from ai_code_agent.agent import Agent, AgentObserver
-from ai_code_agent.config import DEFAULT_MODELS, SUPPORTED_PROVIDERS, load_config
+from ai_code_agent.config import SUPPORTED_PROVIDERS, load_config
 from ai_code_agent.prompts import load_system_prompt
 from ai_code_agent.providers import build_provider
 from ai_code_agent.providers.base import ProviderError, ToolCall
+from ai_code_agent.providers.catalog import entries_by_category
 from ai_code_agent.tools import ToolResult
 from ai_code_agent.ui import TerminalUI, default_history_path
 
@@ -37,7 +39,7 @@ def main(
         None,
         "--provider",
         "-p",
-        help=f"LLM provider ({' | '.join(SUPPORTED_PROVIDERS)}).",
+        help="LLM provider id. Run `ai-code-agent providers` to see all options.",
     ),
     model: str | None = typer.Option(
         None, "--model", "-m", help="Model name for the chosen provider."
@@ -53,6 +55,16 @@ def main(
         "--config",
         help="Path to a TOML config file (default: ~/.config/ai-code-agent/config.toml).",
     ),
+    base_url: str | None = typer.Option(
+        None,
+        "--base-url",
+        help="Override base URL (used by --provider custom for OpenAI-compatible endpoints).",
+    ),
+    api_key: str | None = typer.Option(
+        None,
+        "--api-key",
+        help="Override API key for --provider custom.",
+    ),
     show_version: bool = typer.Option(
         False,
         "--version",
@@ -65,15 +77,45 @@ def main(
     """Launch the interactive code agent if no subcommand is given."""
     if ctx.invoked_subcommand is not None:
         return
-    _run_repl(provider=provider, model=model, working_dir=working_dir, config_path=config_path)
+    _run_repl(
+        provider=provider,
+        model=model,
+        working_dir=working_dir,
+        config_path=config_path,
+        base_url=base_url,
+        api_key=api_key,
+    )
 
 
 @app.command("providers")
-def list_providers() -> None:
-    """List supported providers and their default models."""
+def list_providers(
+    category: str | None = typer.Option(
+        None, "--category", "-c", help="Filter to a single category (case-insensitive substring)."
+    ),
+) -> None:
+    """List supported providers grouped by category, with default models and env vars."""
     console = Console()
-    for name in SUPPORTED_PROVIDERS:
-        console.print(f"  [bold]{name}[/bold]  default: [cyan]{DEFAULT_MODELS[name]}[/cyan]")
+    for cat, items in entries_by_category().items():
+        if category and category.lower() not in cat.lower():
+            continue
+        table = Table(
+            title=f"[bold]{cat}[/bold]",
+            title_justify="left",
+            show_header=True,
+            header_style="bold",
+            box=None,
+            padding=(0, 2),
+        )
+        table.add_column("id", style="cyan", no_wrap=True)
+        table.add_column("provider")
+        table.add_column("default model")
+        table.add_column("env var")
+        for entry in items:
+            env = entry.env_var or ("—" if entry.kind != "openai_compat" else "")
+            model_text = entry.default_model or "(none)"
+            table.add_row(entry.id, entry.display_name, model_text, env or "—")
+        console.print(table)
+        console.print()
 
 
 @app.command("ask")
@@ -82,18 +124,26 @@ def ask(
     provider: str | None = typer.Option(None, "--provider", "-p"),
     model: str | None = typer.Option(None, "--model", "-m"),
     working_dir: Path | None = typer.Option(None, "--cwd", "-C"),
+    base_url: str | None = typer.Option(None, "--base-url"),
+    api_key: str | None = typer.Option(None, "--api-key"),
 ) -> None:
     """Send a single prompt and print the result (non-interactive)."""
     console = Console()
     try:
-        cfg = load_config(cli_provider=provider, cli_model=model, cli_working_dir=working_dir)
+        cfg = load_config(
+            cli_provider=provider,
+            cli_model=model,
+            cli_working_dir=working_dir,
+            cli_base_url=base_url,
+            cli_api_key=api_key,
+        )
     except (ValueError, FileNotFoundError, NotADirectoryError) as exc:
         console.print(f"[red]config error:[/red] {exc}")
         raise typer.Exit(2) from exc
 
     if not cfg.keys.has_key_for(cfg.provider):
         console.print(
-            f"[red]Missing API key for provider {cfg.provider!r}.[/red] See .env.example."
+            f"[red]Missing credentials for provider {cfg.provider!r}.[/red] See .env.example."
         )
         raise typer.Exit(2)
 
@@ -145,6 +195,8 @@ def _run_repl(
     model: str | None,
     working_dir: Path | None,
     config_path: Path | None,
+    base_url: str | None = None,
+    api_key: str | None = None,
 ) -> None:
     console = Console()
     try:
@@ -153,6 +205,8 @@ def _run_repl(
             cli_model=model,
             cli_working_dir=working_dir,
             config_path=config_path,
+            cli_base_url=base_url,
+            cli_api_key=api_key,
         )
     except (ValueError, FileNotFoundError, NotADirectoryError) as exc:
         console.print(f"[red]config error:[/red] {exc}")
@@ -266,7 +320,9 @@ def _handle_slash(
     if cmd == "/provider":
         if not args:
             ui.info(
-                f"provider = {agent.provider.name}; supported: {', '.join(SUPPORTED_PROVIDERS)}"
+                f"provider = {agent.provider.name}  "
+                f"({len(SUPPORTED_PROVIDERS)} supported — run "
+                f"'ai-code-agent providers' for the full list)"
             )
             return False
         new_provider = args[0].lower()
