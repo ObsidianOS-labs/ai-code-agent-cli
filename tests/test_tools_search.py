@@ -39,3 +39,27 @@ def test_grep_search_max_results(tmp_path: Path):
     p.write_text("\n".join(["match"] * 50))
     out = grep_search(tmp_path, "match", max_results=5)
     assert "truncated" in out
+
+
+def test_grep_search_when_workdir_name_matches_skip_dir(tmp_path: Path):
+    """Regression: working dir whose absolute path contains a SKIP_DIR_NAMES
+    component must NOT cause every file to be silently skipped."""
+    workdir = tmp_path / "build" / "myproj"
+    workdir.mkdir(parents=True)
+    (workdir / "main.py").write_text("print('hello-world')\n")
+    out = grep_search(workdir, r"hello-world")
+    assert "main.py" in out
+    assert "No matches" not in out
+
+
+def test_grep_search_still_skips_excluded_subdirs_under_matching_workdir(tmp_path: Path):
+    """The fix above must not regress the original SKIP_DIR_NAMES behavior."""
+    workdir = tmp_path / "build" / "myproj"
+    workdir.mkdir(parents=True)
+    (workdir / "ok.py").write_text("token-x\n")
+    excluded = workdir / "node_modules" / "leaf"
+    excluded.mkdir(parents=True)
+    (excluded / "x.py").write_text("token-x\n")
+    out = grep_search(workdir, r"token-x")
+    assert "ok.py" in out
+    assert "node_modules" not in out

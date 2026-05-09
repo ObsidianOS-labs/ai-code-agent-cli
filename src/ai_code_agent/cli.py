@@ -273,16 +273,21 @@ def _handle_slash(
         if new_provider not in SUPPORTED_PROVIDERS:
             ui.error(f"unsupported provider {new_provider!r}")
             return False
+        old_provider = cfg.provider
+        old_model = cfg.model
         cfg.provider = new_provider
         cfg.model = None
         if not cfg.keys.has_key_for(new_provider):
             ui.error(f"missing API key for {new_provider!r}; not switching")
-            cfg.provider = agent.provider.name
+            cfg.provider = old_provider
+            cfg.model = old_model
             return False
         try:
             agent.provider = build_provider(cfg, system_prompt=system_prompt)
         except ProviderError as exc:
             ui.error(str(exc))
+            cfg.provider = old_provider
+            cfg.model = old_model
             return False
         agent.reset()
         ui.info(f"provider → {agent.provider.display_name()} (history cleared)")
@@ -293,11 +298,13 @@ def _handle_slash(
             ui.info(f"model = {agent.provider.model}")
             return False
         new_model = args[0]
+        old_model = cfg.model
         cfg.model = new_model
         try:
             agent.provider = build_provider(cfg, system_prompt=system_prompt)
         except ProviderError as exc:
             ui.error(str(exc))
+            cfg.model = old_model
             return False
         ui.info(f"model → {agent.provider.display_name()}")
         return False
