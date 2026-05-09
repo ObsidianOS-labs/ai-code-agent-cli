@@ -22,31 +22,60 @@ else:  # pragma: no cover — exercised only on 3.10 runtimes
 
 from dotenv import load_dotenv
 
-DEFAULT_MODELS: dict[str, str] = {
-    "openai": "gpt-4o-mini",
-    "anthropic": "claude-3-5-sonnet-latest",
-    "gemini": "gemini-1.5-flash",
-    "ollama": "llama3.1",
-}
+from ai_code_agent.providers.catalog import CATALOG, ProviderEntry, get_entry
 
-SUPPORTED_PROVIDERS = tuple(DEFAULT_MODELS.keys())
+# Public surface kept stable for back-compat with earlier code & tests.
+DEFAULT_MODELS: dict[str, str] = {
+    entry.id: entry.default_model for entry in CATALOG.values() if entry.default_model
+}
+SUPPORTED_PROVIDERS: tuple[str, ...] = tuple(CATALOG.keys())
 
 
 @dataclass
 class ProviderKeys:
+    # Named fields kept for back-compat with the original four providers.
     openai: str | None = None
     anthropic: str | None = None
     google: str | None = None
     ollama_base_url: str = "http://localhost:11434"
 
+    # Generic env-var → value map populated for every catalog entry that has
+    # an ``env_var`` set. ``api_key_for`` reads from here.
+    extra_api_keys: dict[str, str] = field(default_factory=dict)
+
+    # For ``--provider custom`` and similar bring-your-own-endpoint flows.
+    custom_base_url: str | None = None
+    custom_api_key: str | None = None
+
+    def api_key_for(self, entry: ProviderEntry) -> str | None:
+        """Return the API key to use for ``entry``, or ``None`` if unknown."""
+        # Honour the legacy named fields first so existing flows keep working.
+        if entry.id == "openai":
+            return self.openai
+        if entry.id == "anthropic":
+            return self.anthropic
+        if entry.id == "gemini":
+            return self.google
+        if entry.id == "custom":
+            return self.custom_api_key
+        if entry.env_var:
+            return self.extra_api_keys.get(entry.env_var)
+        return None
+
     def has_key_for(self, provider: str) -> bool:
-        if provider == "openai":
-            return bool(self.openai)
-        if provider == "anthropic":
-            return bool(self.anthropic)
-        if provider == "gemini":
-            return bool(self.google)
-        return provider == "ollama"
+        try:
+            entry = get_entry(provider)
+        except KeyError:
+            return False
+        if entry.kind == "ollama":
+            return True
+        if entry.kind in ("azure", "vertex_anthropic", "bedrock"):
+            # These rely on cloud SDK credential chains; we can't verify here
+            # without invoking the SDK, so optimistically return True.
+            return True
+        if entry.kind == "custom":
+            return bool(self.custom_base_url)
+        return bool(self.api_key_for(entry))
 
 
 @dataclass
@@ -63,11 +92,14 @@ class Config:
     def effective_model(self) -> str:
         return self.model or DEFAULT_MODELS.get(self.provider, "")
 
+    def entry(self) -> ProviderEntry:
+        return get_entry(self.provider)
+
     def ensure_provider_supported(self) -> None:
         if self.provider not in SUPPORTED_PROVIDERS:
             raise ValueError(
                 f"Unsupported provider {self.provider!r}. "
-                f"Choose one of: {', '.join(SUPPORTED_PROVIDERS)}."
+                f"Run `ai-code-agent providers` to see the full catalog."
             )
 
 
@@ -77,12 +109,31 @@ def default_config_path() -> Path:
     return base / "ai-code-agent" / "config.toml"
 
 
+def _load_extra_api_keys() -> dict[str, str]:
+    """Read every catalog entry's ``env_var`` from the environment.
+
+    Each value is captured at load time so callers can inspect availability
+    without re-reading the environment. Entries with no ``env_var`` (Ollama,
+    Vertex, Bedrock, custom) are skipped.
+    """
+    result: dict[str, str] = {}
+    for entry in CATALOG.values():
+        if not entry.env_var:
+            continue
+        value = os.environ.get(entry.env_var)
+        if value:
+            result[entry.env_var] = value
+    return result
+
+
 def load_config(
     *,
     cli_provider: str | None = None,
     cli_model: str | None = None,
     cli_working_dir: Path | None = None,
     config_path: Path | None = None,
+    cli_base_url: str | None = None,
+    cli_api_key: str | None = None,
 ) -> Config:
     """Resolve the effective :class:`Config` for this run."""
     load_dotenv(override=False)
@@ -129,6 +180,17 @@ def load_config(
             os.environ.get("OLLAMA_BASE_URL")
             or file_data.get("ollama_base_url")
             or "http://localhost:11434"
+        ),
+        extra_api_keys=_load_extra_api_keys(),
+        custom_base_url=(
+            cli_base_url
+            or os.environ.get("CUSTOM_OPENAI_BASE_URL")
+            or file_data.get("custom_base_url")
+        ),
+        custom_api_key=(
+            cli_api_key
+            or os.environ.get("CUSTOM_OPENAI_API_KEY")
+            or file_data.get("custom_api_key")
         ),
     )
 
